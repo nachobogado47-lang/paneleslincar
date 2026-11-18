@@ -42,14 +42,16 @@ th,td{padding:7px 8px;text-align:right;border-bottom:1px solid var(--ln);white-s
 <div class="card"><h2>Ahorro estimado por mes</h2><div id="ch1"></div></div>
 <div class="card"><h2>Historial</h2><div id="tb"></div></div>
 <div class="card"><h2>Mini informe: ¿los paneles rindieron lo que deberían?</h2><div id="rep"></div></div>
-<div class="card foot"><div id="acc"></div><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn s" id="ex">Exportar copia</button><label class="btn s">Importar copia<input id="im" type="file" accept=".json" hidden></label><button class="btn s" id="cf">Inversión / impuestos</button></div>
-<p>Ahorro = energía solar consumida directamente × precio ENERSA de energía “resto” × factor de impuestos + crédito por excedentes. Los cargos de potencia y fijo no cambian con los paneles. El consumo total se estima como kWh facturados + autoconsumo, porque el inversor no registra el consumo nocturno. El export diario de DeyeCloud no trae potencia (kW), solo energía (kWh). Los datos se guardan en este navegador: exportá una copia de vez en cuando.</p></div>
+<div class="card foot"><div id="acc"></div><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn s" id="ex">Exportar copia</button><label class="btn s">Importar copia<input id="im" type="file" accept=".json" hidden></label><button class="btn s" id="cf">Inversión / impuestos</button><button class="btn s" id="lo" style="display:none">Cerrar sesión</button></div>
+<p>Ahorro directo estimado = autoconsumo × costo variable medio ponderado de punta, resto y valle. Por defecto no se agregan impuestos: solo deben incluirse si se verifica que son evitables al consumir menos energía. El crédito por excedentes se toma de la factura. Se muestran por separado el balance energético del inversor y la compra facturada por ENERSA; no deben mezclarse si los períodos no coinciden. El export diario de DeyeCloud trae energía (kWh), no potencia (kW). Los datos se guardan en este navegador: exportá una copia de vez en cuando.</p></div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-let S={days:{},inv:{},cfg:{inv0:27000000,tax:1.4325,amp:"2026-11-06",share:0.5,v2:1}};
+let S={days:{},inv:{},cfg:{inv0:27000000,tax:1,amp:"2026-11-06",share:0.5,v2:1,v3:1}};
 try{const r=localStorage.getItem("solarLincar");if(r)S=Object.assign(S,JSON.parse(r))}catch(e){}
 if(!S.cfg.v2)S.cfg=Object.assign(S.cfg,{inv0:27000000,amp:"2026-11-06",share:0.5,v2:1});
+// Migración metodológica: se elimina el multiplicador impositivo automático anterior.
+if(!S.cfg.v3){S.cfg.tax=1;S.cfg.v3=1;}
 const save=()=>{try{localStorage.setItem("solarLincar",JSON.stringify(S))}catch(e){}if(window.cloudSave)window.cloudSave(S)};
 const fmt=(n,d=0)=>n==null||isNaN(n)?"—":n.toLocaleString("es-AR",{maximumFractionDigits:d,minimumFractionDigits:d});
 const $$=n=>n==null||isNaN(n)?"—":"$ "+fmt(n);
@@ -79,7 +81,7 @@ async function readPdf(file){
   const g=t.match(/Energ[ií]a\s+Inyectada:\s*(\d[\d.]*)\s*kWh\s*\$\s*(\d[\d.,]*)/i);const tot=t.match(/Total\s+Factura\s*([\d.]+,\d{2})/i);
   if(!a||!b||!c||!d)throw new Error("No pude leer la factura (energía o período). Revisá que sea una factura ENERSA Tarifa 3.");
   const m="20"+d[3]+"-"+d[2];
-  const inv={dias:+d[7],kp:+a[1],kr:+b[1],kv:+c[1],pp:num(a[3]),pr:num(b[3]),pv:num(c[3]),kin:g?num(g[1]):0,pc:g?num(g[2]):0,total:tot?num(tot[1]):guessTotal(t)};
+  const inv={dias:+d[7],desde:"20"+d[3]+"-"+d[2]+"-"+d[1],hasta:"20"+d[6]+"-"+d[5]+"-"+d[4],kp:+a[1],kr:+b[1],kv:+c[1],pp:num(a[3]),pr:num(b[3]),pv:num(c[3]),kin:g?num(g[1]):0,pc:g?num(g[2]):0,total:tot?num(tot[1]):guessTotal(t)};
   if(S.inv[m]&&!(await ask("La factura de "+lab(m)+" ya estaba cargada. ¿Reemplazar?")))return "Factura de "+lab(m)+" ya cargada: se mantuvo.";
   S.inv[m]=inv;return "Factura "+lab(m)+": "+fmt(inv.kp+inv.kr+inv.kv)+" kWh facturados, "+fmt(inv.kin)+" kWh inyectados."}
 async function handle(files){
@@ -93,8 +95,39 @@ function calc(m){
   const prod=ds.reduce((s,k)=>s+S.days[k][0],0),feed=ds.reduce((s,k)=>s+S.days[k][1],0),au=prod-feed;
   const best=ds.reduce((b,k)=>!b||S.days[k][0]>S.days[b][0]?k:b,null);
   const r={m,ds,prod,feed,au,nd:ds.length,best,i};
-  if(i){const ref=i.pr*S.cfg.tax;r.a1=au*ref;r.cr=i.kin*i.pc;r.ah=r.a1+r.cr;r.full=ds.length>=0.95*i.dias;
-    r.cons=(i.kp+i.kr+i.kv)+au;r.cov=au/r.cons;r.sin=i.total!=null?i.total+r.ah:null;const post=ds.filter(k=>k>S.cfg.amp);const auP=post.reduce((s,k)=>s+S.days[k][0]-S.days[k][1],0),fP=post.reduce((s,k)=>s+S.days[k][1],0);r.ahAmp=(auP*ref+(feed?r.cr*fP/feed:0))*S.cfg.share;r.post=post.length}
+  if(i){
+    r.full=ds.length>=0.95*i.dias;
+    // Si la factura trae fechas, verificar también que coincidan con los días cargados.
+    if(i.desde&&i.hasta){
+      const start=new Date(i.desde+"T00:00:00Z"),end=new Date(i.hasta+"T00:00:00Z");
+      const expected=Math.round((end-start)/86400000)+1;
+      const inside=ds.filter(k=>k>=i.desde&&k<=i.hasta).length;
+      r.full=expected===i.dias&&inside>=Math.ceil(expected*0.95)&&inside===ds.length;
+    }
+    // Costo variable medio ponderado por los kWh de punta, resto y valle.
+    const billBuy=i.kp+i.kr+i.kv;
+    r.rate=billBuy>0?(i.kp*i.pp+i.kr*i.pr+i.kv*i.pv)/billBuy:(i.pr||0);
+    const taxFactor=Number.isFinite(Number(S.cfg.tax))&&Number(S.cfg.tax)>0?Number(S.cfg.tax):1;
+    r.rateApplied=r.rate*taxFactor;
+    r.a1=au*r.rateApplied;
+    r.cr=i.kin*i.pc;
+    // No sumar un mes de factura completo con generación de un período parcial.
+    r.ah=r.full?r.a1+r.cr:null;
+    // Balance energético medido por el inversor (compra de red + autoconsumo).
+    r.invBuy=ds.reduce((s,k)=>s+(Number(S.days[k][3])||0),0);
+    r.invCons=r.invBuy+au;
+    r.invCov=r.invCons>0?au/r.invCons:0;
+    // Referencia económica/fiscal de ENERSA. Solo comparable si el período está completo.
+    r.billBuy=billBuy;
+    r.billCons=r.full?billBuy+au:null;
+    r.billCov=r.billCons>0?au/r.billCons:null;
+    r.cons=r.invCons;r.cov=r.invCov;
+    r.sin=r.full&&i.total!=null?i.total+r.ah:null;
+    const post=ds.filter(k=>k>S.cfg.amp);
+    const auP=post.reduce((s,k)=>s+S.days[k][0]-S.days[k][1],0),fP=post.reduce((s,k)=>s+S.days[k][1],0);
+    r.ahAmp=r.full?(auP*r.rateApplied+(feed?r.cr*fP/feed:0))*S.cfg.share:0;
+    r.post=post.length;
+  }
   return r}
 const months=()=>[...new Set([...Object.keys(S.days).map(k=>k.slice(0,7)),...Object.keys(S.inv)])].sort();
 function bars(items,h,fmtv){ // items:[{l,v:[..],c:[..],o}]
@@ -110,22 +143,24 @@ function render(){
   $("chips").innerHTML=ms.map(m=>'<button class="chip'+(m===sel?" a":"")+'" data-m="'+m+'">'+lab(m)+'</button>').join("");
   document.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{sel=b.dataset.m;render()});
   if(!ms.length){$("view").innerHTML='<div class="card hero"><div class="k">Todavía no hay datos</div><div style="color:var(--mu)">Subí el Excel de DeyeCloud y la factura ENERSA del mismo mes.</div></div>';$("ch1").innerHTML="";$("tb").innerHTML="";$("acc").textContent="";return}
-  const r=calc(sel),i=r.i;let h="";const buy=i?i.kp+i.kr+i.kv:null;
+  const r=calc(sel),i=r.i;let h="";const billBuy=i?i.kp+i.kr+i.kv:null;const invBuy=i?r.invBuy:null;
   const kpi=(c,k,v,n)=>'<div class="kpi '+c+'"><div class="k">'+k+'</div><div class="v">'+v+'</div><div class="n">'+n+'</div></div>';
-  h+='<div class="card hero"><div class="k">Cuánto ahorraste en '+lab(sel)+' gracias a los paneles</div><div class="v">'+(i?$$(r.ah):"Falta la factura")+'</div>'+(i?'<div class="k">'+$$(r.a1)+' por energía solar usada en la planta + '+$$(r.cr)+' por lo que enviaste a la red'+(r.sin!=null?'<br>Sin paneles habrías pagado ≈ '+$$(r.sin)+' y pagaste '+$$(i.total):'')+'</div>':'')+(i&&!r.full?'<div class="warn">Excel incompleto: '+r.nd+' de '+i.dias+' días. El ahorro es parcial.</div>':'')+(!r.nd?'<div class="warn">Falta el Excel de este mes.</div>':'')+(sel>="2026-11"?'<div class="k">Sistema ampliado (obra 23/10 al 6/11)</div>':sel==="2026-10"?'<div class="k">Sistema original (la obra de ampliación empezó el 23/10)</div>':'<div class="k">Sistema original</div>')+'</div>';
-  h+='<div class="grid">'+kpi("gen","☀️ Generada por tus paneles",fmt(r.prod)+" kWh","Lo que produjeron los paneles en el mes")+kpi("inj","🔌 Enviado a la red",fmt(i?i.kin:r.feed)+" kWh",i?"Equivale a <b>"+$$(r.cr)+"</b>":"Falta la factura para ver los pesos")+kpi("buy","🏭 Comprado a ENERSA",i?fmt(buy)+" kWh":"—",i&&i.total!=null?"Factura del mes: "+$$(i.total):"Falta la factura")+'</div>';
-  if(i){const tot=r.cons,pb=buy/tot*100,pp=r.au/tot*100;
-    h+='<div class="card tot"><div class="k">Consumo total de la empresa</div><div class="v">'+fmt(tot)+' kWh</div><div class="split"><span style="width:'+pb+'%;background:var(--buy)"></span><span style="width:'+pp+'%;background:var(--gen)"></span></div><div class="legend"><span><i style="background:var(--buy)"></i>Comprado a ENERSA: <b>'+fmt(buy)+' kWh ('+fmt(pb,1)+'%)</b></span><span><i style="background:var(--gen)"></i>Generado por tus paneles: <b>'+fmt(r.au)+' kWh ('+fmt(pp,1)+'%)</b></span></div>'+(r.full?'':'<div class="warn">Excel incompleto: la parte de los paneles es aproximada.</div>')+'</div>'}
-  h+='<div class="card"><h2>Día por día (kWh)</h2><div class="legend" style="margin-bottom:6px"><span><i style="background:var(--buy)"></i>Comprado a ENERSA</span><span><i style="background:var(--gen)"></i>Generado por tus paneles y usado en la planta</span><span><i style="background:var(--inj)"></i>Enviado a la red (vendido a ENERSA)</span></div>'+bars(r.ds.map(k=>{const d=S.days[k];return{l:+k.slice(8)%5==0||k.slice(8)=="01"?+k.slice(8):"",v:[d[3],Math.max(0,d[0]-d[1]),d[1]],c:["var(--buy)","var(--gen)","var(--inj)"],t:k}}),160)+'<div class="cap">Rojo + amarillo = lo que consumió la planta ese día. El verde es lo que sobró de los paneles y se envió a la red. El inversor no mide de noche, por eso la compra nocturna no aparece en este gráfico.</div></div>';
+  h+='<div class="card hero"><div class="k">'+(r.full?'Ahorro estimado del mes completo':'Ahorro del mes: período incompleto')+'</div><div class="v">'+(i&&r.full?$$(r.ah):i?'—':"Falta la factura")+'</div>'+(i?'<div class="k">Ahorro directo estimado por autoconsumo: <b>'+$$(r.a1)+'</b><br>Crédito reconocido por ENERSA: <b>'+$$(r.cr)+'</b>'+(r.full?(r.sin!=null?'<br>Sin paneles habrías pagado ≈ '+$$(r.sin)+' y pagaste '+$$(i.total):''):'<br><span class="warn">No se suman: la factura corresponde a '+i.dias+' días y el Excel tiene '+r.nd+' días. El crédito mostrado es el de la factura completa.</span>')+'</div>':'')+(!r.nd?'<div class="warn">Falta el Excel de este mes.</div>':'')+(sel>="2026-11"?'<div class="k">Sistema ampliado (obra 23/10 al 6/11)</div>':sel==="2026-10"?'<div class="k">Sistema original (la obra de ampliación empezó el 23/10)</div>':'<div class="k">Sistema original</div>')+'</div>';
+  h+='<div class="grid">'+kpi("gen","☀️ Generada por tus paneles",fmt(r.prod)+" kWh","Producción registrada por DeyeCloud")+kpi("inj","🔌 Inyección a la red",fmt(i?i.kin:r.feed)+" kWh",i?"Crédito de factura: <b>"+$$(r.cr)+"</b>":"Dato diario del inversor")+kpi("buy","🏭 Compra de red según inversor",i?fmt(invBuy)+" kWh":"—","Medición diaria DeyeCloud; no es la lectura fiscal ENERSA")+'</div>';
+  if(i){const tot=r.invCons,pb=tot>0?invBuy/tot*100:0,pp=tot>0?r.au/tot*100:0;
+    h+='<div class="card tot"><div class="k">Balance energético según inversor</div><div class="v">'+fmt(tot)+' kWh</div><div class="split"><span style="width:'+pb+'%;background:var(--buy)"></span><span style="width:'+pp+'%;background:var(--gen)"></span></div><div class="legend"><span><i style="background:var(--buy)"></i>Compra de red medida por inversor: <b>'+fmt(invBuy)+' kWh ('+fmt(pb,1)+'%)</b></span><span><i style="background:var(--gen)"></i>Autoconsumo solar: <b>'+fmt(r.au)+' kWh ('+fmt(pp,1)+'%)</b></span></div><div class="cap">Cobertura solar según inversor: <b>'+fmt(r.invCov*100,1)+'%</b>. Es el criterio usado para el balance energético de Green Garden.</div></div>';
+    h+='<div class="card"><h2>Referencia de la factura ENERSA</h2><div class="grid">'+kpi("buy","Energía comprada facturada",fmt(billBuy)+" kWh","Dato fiscal de la factura")+kpi("gen","Consumo estimado con autoconsumo",r.full?fmt(r.billCons)+" kWh":"No comparable","Compra facturada + autoconsumo; requiere períodos coincidentes")+kpi("inj","Cobertura estimada",r.full?fmt(r.billCov*100,1)+"%":"—","Solo se calcula con el mes completo")+'</div>'+(r.full?'':'<div class="warn">No se calcula consumo ni cobertura con ENERSA porque el Excel no cubre el período completo de la factura.</div>')+'</div>';
+  }
+  h+='<div class="card"><h2>Día por día (kWh)</h2><div class="legend" style="margin-bottom:6px"><span><i style="background:var(--buy)"></i>Compra de red según inversor</span><span><i style="background:var(--gen)"></i>Autoconsumo solar</span><span><i style="background:var(--inj)"></i>Inyección a la red</span></div>'+bars(r.ds.map(k=>{const d=S.days[k];return{l:+k.slice(8)%5==0||k.slice(8)=="01"?+k.slice(8):"",v:[d[3],Math.max(0,d[0]-d[1]),d[1]],c:["var(--buy)","var(--gen)","var(--inj)"],t:k}}),160)+'<div class="cap">La compra de red diaria proviene de DeyeCloud y no debe confundirse con la energía facturada por ENERSA. El inversor puede no registrar consumos fuera de su punto de medición.</div></div>';
   $("view").innerHTML=h;
   const all=ms.map(calc);
-  $("ch1").innerHTML=bars(all.map(x=>({l:lab(x.m),v:[x.ah||0],c:["var(--sav)"],o:x.i&&x.full?1:.45})),150,v=>v?"$"+fmt(v/1000)+"k":"");
-  $("tb").innerHTML='<table><tr><th>Mes</th><th class="g">Generado kWh</th><th class="i">A la red kWh</th><th class="i">A la red $</th><th class="b">Comprado kWh</th><th>Consumo total kWh</th><th class="g">% de paneles</th><th>Ahorro</th><th>Estado</th></tr>'+all.slice().reverse().map(x=>'<tr><td>'+lab(x.m)+'</td><td>'+fmt(x.prod)+'</td><td>'+fmt(x.i?x.i.kin:x.feed)+'</td><td>'+(x.i?$$(x.cr):"—")+'</td><td>'+(x.i?fmt(x.i.kp+x.i.kr+x.i.kv):"—")+'</td><td>'+(x.i?fmt(x.cons):"—")+'</td><td>'+(x.i&&x.full?fmt(x.cov*100,1)+"%":"—")+'</td><td>'+$$(x.ah)+'</td><td>'+(!x.i?'<span class="warn">falta factura</span>':!x.nd?'<span class="warn">falta Excel</span>':x.full?"OK":'<span class="warn">parcial</span>')+'</td></tr>').join("")+'</table>';
+  $("ch1").innerHTML=bars(all.map(x=>({l:lab(x.m),v:[x.full?(x.ah||0):0],c:["var(--sav)"],o:x.i&&x.full?1:.35})),150,v=>v?"$"+fmt(v/1000)+"k":"");
+  $("tb").innerHTML='<table><tr><th>Mes</th><th>Generado</th><th>Inyectado</th><th>Compra red inversor</th><th>Consumo inversor</th><th>Cobertura inversor</th><th>Compra ENERSA</th><th>Consumo estimado ENERSA</th><th>Ahorro estimado</th><th>Estado</th></tr>'+all.slice().reverse().map(x=>'<tr><td>'+lab(x.m)+'</td><td>'+fmt(x.prod)+'</td><td>'+fmt(x.i?x.i.kin:x.feed)+'</td><td>'+(x.i?fmt(x.invBuy):"—")+'</td><td>'+(x.i?fmt(x.invCons):"—")+'</td><td>'+(x.i?fmt(x.invCov*100,1)+"%":"—")+'</td><td>'+(x.i?fmt(x.billBuy):"—")+'</td><td>'+(x.i&&x.full?fmt(x.billCons):"—")+'</td><td>'+(x.i&&x.full?$$(x.ah):"—")+'</td><td>'+(!x.i?'<span class="warn">falta factura</span>':!x.nd?'<span class="warn">falta Excel</span>':x.full?"OK":'<span class="warn">período parcial</span>')+'</td></tr>').join("")+'</table><div class="cap">Los datos del inversor y de ENERSA se muestran separados porque pueden tener períodos y puntos de medición diferentes.</div>';
   const ok=all.filter(x=>x.i&&x.full&&x.post),tot=ok.reduce((s,x)=>s+x.ahAmp,0),pd=ok.reduce((s,x)=>s+x.post,0),pr=pd?tot/pd*30.4:0;
   $("acc").innerHTML='<b>Amortización de la ampliación</b> (costo '+$$(S.cfg.inv0)+'). '+(pr?'Ahorro atribuido acumulado: <b>'+$$(tot)+'</b> ('+fmt(tot/S.cfg.inv0*100,1)+'% recuperado). Con un ahorro mensual de '+$$(pr)+', faltarían unos '+fmt((S.cfg.inv0-tot)/pr/12,1)+' años. Estimación sin inflación, cambios de tarifa ni estacionalidad. Se atribuye el '+fmt(S.cfg.share*100)+'% del ahorro del sistema a la ampliación (supuesto, porque duplicó los paneles).':'todavía no hay meses completos con los paneles nuevos. Cargá el Excel y la factura de noviembre cuando estén.')}
 $("ex").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:"application/json"}));a.download="solar-lincar-copia.json";a.click()};
 $("im").onchange=async e=>{try{const j=JSON.parse(await e.target.files[0].text());if(!j.days||!j.inv)throw 0;S=Object.assign(S,j);save();msg("Copia importada.");render()}catch(x){msg("Archivo de copia no válido.",true)}};
-$("cf").onclick=()=>{const a=prompt("Costo de la ampliación en pesos:",S.cfg.inv0);if(a===null)return;const n=num(a.replace(/\s/g,""))||parseFloat(a);const b=prompt("Factor de impuestos sobre la energía (1 + tasa municipal 13% + IVA 27% + percepciones 3,25% = 1,4325):",String(S.cfg.tax).replace(".",","));if(n>0)S.cfg.inv0=n;const sh=prompt("Fracción del ahorro atribuida a la ampliación (0,5 = 50%, supuesto porque duplicó los paneles):",String(S.cfg.share).replace(".",","));const q=parseFloat(String(sh).replace(",","."));if(q>0&&q<=1)S.cfg.share=q;const t=parseFloat(String(b).replace(",","."));if(t>1)S.cfg.tax=t;save();render()};
+$("cf").onclick=()=>{const a=prompt("Costo de la ampliación en pesos:",S.cfg.inv0);if(a===null)return;const n=num(a.replace(/\s/g,""))||parseFloat(a);const b=prompt("Factor adicional sobre el costo variable (1 = sin impuestos adicionales). Solo aumentalo si verificaste qué impuestos se ahorran al consumir menos kWh:",String(S.cfg.tax).replace(".",","));if(n>0)S.cfg.inv0=n;const sh=prompt("Fracción del ahorro atribuida a la ampliación (0,5 = 50%, supuesto porque duplicó los paneles):",String(S.cfg.share).replace(".",","));const q=parseFloat(String(sh).replace(",","."));if(q>0&&q<=1)S.cfg.share=q;const t=parseFloat(String(b).replace(",","."));if(t>=1)S.cfg.tax=t;save();render()};
 
 
 async function readWeather(file){
@@ -166,12 +201,35 @@ const _render=render;render=function(){_render();try{report()}catch(e){}};
 const tip=document.createElement("div");tip.id="tip";document.body.appendChild(tip);
 function onTip(e){const t=e.target.closest?e.target.closest(".hit"):null;if(!t){tip.style.display="none";return}
   const k=t.dataset.d,d=S.days[k];if(!d)return;
-  tip.innerHTML='<b>'+k.slice(8)+'/'+k.slice(5,7)+'</b><br><i style="background:var(--buy)"></i>Comprado a ENERSA: <b>'+fmt(d[3],1)+' kWh</b><br><i style="background:var(--gen)"></i>Generado por paneles y usado: <b>'+fmt(Math.max(0,d[0]-d[1]),1)+' kWh</b><br><i style="background:var(--inj)"></i>Enviado a la red: <b>'+fmt(d[1],1)+' kWh</b>';
+  tip.innerHTML='<b>'+k.slice(8)+'/'+k.slice(5,7)+'</b><br><i style="background:var(--buy)"></i>Compra de red según inversor: <b>'+fmt(d[3],1)+' kWh</b><br><i style="background:var(--gen)"></i>Autoconsumo solar: <b>'+fmt(Math.max(0,d[0]-d[1]),1)+' kWh</b><br><i style="background:var(--inj)"></i>Inyección a la red: <b>'+fmt(d[1],1)+' kWh</b>';
   tip.style.display="block";const w=tip.offsetWidth,hh=tip.offsetHeight;
   tip.style.left=Math.max(6,Math.min(e.clientX+12,innerWidth-w-6))+"px";tip.style.top=Math.max(6,Math.min(e.clientY-hh-8,innerHeight-hh-6))+"px"}
 document.addEventListener("mousemove",onTip);document.addEventListener("click",onTip);
 window.getState=()=>S;
-window.applyRemote=o=>{S=Object.assign({days:{},inv:{},cfg:S.cfg},o);if(!S.cfg||!S.cfg.v2)S.cfg=Object.assign({inv0:27000000,tax:1.4325,amp:"2026-11-06",share:0.5,v2:1},S.cfg||{});try{localStorage.setItem("solarLincar",JSON.stringify(S))}catch(e){}render()};
+window.applyRemote=o=>{S=Object.assign({days:{},inv:{},cfg:S.cfg},o);if(!S.cfg||!S.cfg.v2)S.cfg=Object.assign({inv0:27000000,tax:1,amp:"2026-11-06",share:0.5,v2:1},S.cfg||{});if(!S.cfg.v3){S.cfg.tax=1;S.cfg.v3=1;}try{localStorage.setItem("solarLincar",JSON.stringify(S))}catch(e){}render()};
 render();
+</script>
+<div id="login"><div class="card"><h1>Solar Lincar</h1><div class="sub">Ingresá para ver y guardar tus datos en la nube.</div><input id="em" type="email" placeholder="Mail" autocomplete="username"><input id="pw" type="password" placeholder="Contraseña" autocomplete="current-password"><div id="lerr"></div><button class="btn" id="lg" style="width:100%">Entrar</button></div></div>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,signOut} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getFirestore,doc,getDoc,setDoc,onSnapshot} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+const app=initializeApp({apiKey:"AIzaSyDFejZz1vm-x9JdXejO4K1SQht_H8ucqnI",authDomain:"informe-paneles-solares-lincar.firebaseapp.com",projectId:"informe-paneles-solares-lincar",storageBucket:"informe-paneles-solares-lincar.firebasestorage.app",messagingSenderId:"414418610546",appId:"1:414418610546:web:41d2419775e2bd1f0b15eb"});
+const auth=getAuth(app),db=getFirestore(app),ref=doc(db,"solarLincar","main"),$=id=>document.getElementById(id);
+let unsub=null,timer=null;
+$("lg").onclick=async()=>{$("lerr").textContent="";try{await signInWithEmailAndPassword(auth,$("em").value.trim(),$("pw").value)}catch(e){$("lerr").textContent=e.code==="auth/operation-not-allowed"?"Falta habilitar Correo/contraseña en Firebase.":"Mail o contraseña incorrectos."}};
+$("pw").addEventListener("keydown",e=>{if(e.key==="Enter")$("lg").click()});
+$("lo").onclick=()=>signOut(auth);
+onAuthStateChanged(auth,async u=>{
+  if(!u){$("login").style.display="flex";$("lo").style.display="none";window.cloudSave=null;if(unsub){unsub();unsub=null}return}
+  $("login").style.display="none";$("lo").style.display="";
+  try{
+    const snap=await getDoc(ref);
+    if(snap.exists())window.applyRemote(JSON.parse(snap.data().json));
+    else{const l=window.getState();if(Object.keys(l.days).length||Object.keys(l.inv).length)await setDoc(ref,{json:JSON.stringify(l),t:Date.now()})}
+    window.cloudSave=st=>{clearTimeout(timer);timer=setTimeout(async()=>{try{await setDoc(ref,{json:JSON.stringify(st),t:Date.now()})}catch(e){msg("No se pudo guardar en la nube ("+e.code+"). Revisá la conexión.",true)}},400)};
+    unsub=onSnapshot(ref,sn=>{if(sn.metadata.hasPendingWrites||!sn.exists())return;window.applyRemote(JSON.parse(sn.data().json))});
+  }catch(e){msg("No se pudo conectar con la base de datos ("+e.code+"). Revisá las reglas de Firestore.",true)}
+});
 </script>
 </body></html>
